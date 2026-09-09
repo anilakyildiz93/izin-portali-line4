@@ -73,13 +73,12 @@
    (Firebase Console > Project Settings > General > Your apps > Web app > SDK setup and configuration)
    ===================================================================== */
 const firebaseConfig = {
-  apiKey: "AIzaSyAtrTgJS5_KUtPte_8Npr79Ek87vi73U_o",
-  authDomain: "izin-portali-46c4c.firebaseapp.com",
-  projectId: "izin-portali-46c4c",
-  storageBucket: "izin-portali-46c4c.firebasestorage.app",
-  messagingSenderId: "569534457357",
-  appId: "1:569534457357:web:fd647b1e133d6089e7d744",
-  measurementId: "G-5NLJ6D4RRQ"
+  apiKey: 'YOUR-API-KEY',
+  authDomain: 'YOUR-PROJECT-ID.firebaseapp.com',
+  projectId: 'YOUR-PROJECT-ID',
+  storageBucket: 'YOUR-PROJECT-ID.appspot.com',
+  messagingSenderId: 'YOUR-SENDER-ID',
+  appId: 'YOUR-APP-ID'
 };
 
 // Bu site Vercel'e yüklendiğinde admin işlemleri (çalışan ekleme, toplu içeri
@@ -120,6 +119,20 @@ function normalizeAnnouncement(id, d) {
     title: d.title,
     content: d.content,
     published_at: d.publishedAt && d.publishedAt.toDate ? d.publishedAt.toDate().toISOString() : d.publishedAt
+  };
+}
+function normalizeAbsence(id, d) {
+  return {
+    id,
+    registry_number: d.registryNumber || '',
+    employee_id: d.employeeId || null,
+    employee_name: d.employeeName || '',
+    leave_type: d.leaveType || '',
+    start_date: d.startDate || '',
+    end_date: d.endDate || '',
+    days: d.days ?? null,
+    description: d.description || '',
+    created_at: d.createdAt && d.createdAt.toDate ? d.createdAt.toDate().toISOString() : d.createdAt
   };
 }
 function normalizeReport(id, d) {
@@ -194,6 +207,28 @@ async function loadMyPeriodicChecks(uid) {
     state.myPeriodicChecks = [];
   }
 }
+async function loadAllAbsences() {
+  try {
+    const snap = await db.collection('absences').get();
+    state.absences = snap.docs
+      .map(d => normalizeAbsence(d.id, d.data()))
+      .sort((a, b) => new Date(b.start_date || 0) - new Date(a.start_date || 0));
+  } catch (err) {
+    console.error('Devamsızlık kayıtları alınamadı:', err.message);
+    state.absences = [];
+  }
+}
+async function loadMyAbsences(uid) {
+  try {
+    const snap = await db.collection('absences').where('employeeId', '==', uid).get();
+    state.myAbsences = snap.docs
+      .map(d => normalizeAbsence(d.id, d.data()))
+      .sort((a, b) => new Date(b.start_date || 0) - new Date(a.start_date || 0));
+  } catch (err) {
+    console.error('Devamsızlık kayıtları alınamadı:', err.message);
+    state.myAbsences = [];
+  }
+}
 async function callFunction(name, body) {
   const idToken = await fbAuth.currentUser.getIdToken();
   const res = await fetch(`${FUNCTIONS_BASE}/api/${name}`, {
@@ -228,7 +263,15 @@ const state = {
   reportFormError: '',
   adminReportFilter: 'hepsi',
   periodicChecks: [],
-  myPeriodicChecks: []
+  myPeriodicChecks: [],
+  absences: [],
+  myAbsences: [],
+  absenceBulkRows: [],
+  absenceBulkFileName: '',
+  absenceBulkSheetName: '',
+  absenceImporting: false,
+  absenceBulkResults: null,
+  adminAbsenceSearch: ''
 };
 
 /* =====================================================================
@@ -425,7 +468,7 @@ async function render() {
   }
 
   const role = state.profile.role;
-  const adminRoutes = ['#/admin', '#/admin/employees', '#/admin/import', '#/admin/announcements', '#/admin/reports', '#/admin/periodic-checks'];
+  const adminRoutes = ['#/admin', '#/admin/employees', '#/admin/import', '#/admin/announcements', '#/admin/reports', '#/admin/periodic-checks', '#/admin/absences'];
 
   if (adminRoutes.includes(route) && role !== 'admin') {
     location.hash = '#/dashboard';
@@ -443,7 +486,7 @@ async function render() {
   if (route === '#/dashboard') {
     title = `Merhaba, ${escapeHtml(state.profile.first_name)} 👋`;
     subtitle = `${escapeHtml(state.profile.department)} · Sicil No: ${escapeHtml(state.profile.registry_number || '—')}`;
-    await Promise.all([loadAnnouncements(), loadMyPeriodicChecks(state.profile.id)]);
+    await Promise.all([loadAnnouncements(), loadMyPeriodicChecks(state.profile.id), loadMyAbsences(state.profile.id)]);
     content = employeeDashboardView();
   } else if (route === '#/admin') {
     title = 'Genel Bakış';
@@ -479,6 +522,11 @@ async function render() {
     await Promise.all([loadEmployees(), loadAllPeriodicChecks()]);
     subtitle = `${state.periodicChecks.length} kayıtlı kontrol`;
     content = adminPeriodicChecksView();
+  } else if (route === '#/admin/absences') {
+    title = 'Devamsızlık / İzin Kayıtları';
+    await Promise.all([loadEmployees(), loadAllAbsences()]);
+    subtitle = `${state.absences.length} kayıt`;
+    content = adminAbsencesView();
   } else {
     location.hash = role === 'admin' ? '#/admin' : '#/dashboard';
     return;
@@ -512,7 +560,8 @@ function shell(title, subtitle, content, role, route) {
     { href: '#/admin/import', label: 'Toplu Ekleme', icon: 'upload-cloud' },
     { href: '#/admin/announcements', label: 'Duyurular', icon: 'megaphone' },
     { href: '#/admin/reports', label: 'Bildirimler', icon: 'alert-triangle' },
-    { href: '#/admin/periodic-checks', label: 'Periyodik Kontroller', icon: 'stethoscope' }
+    { href: '#/admin/periodic-checks', label: 'Periyodik Kontroller', icon: 'stethoscope' },
+    { href: '#/admin/absences', label: 'Devamsızlık Kayıtları', icon: 'calendar-x' }
   ];
   const links = role === 'admin' ? adminLinks : employeeLinks;
   const p = state.profile;
@@ -736,6 +785,34 @@ function employeeDashboardView() {
           <div class="flex shrink-0 items-center gap-2">
             <span class="text-xs text-ink-800/55 dark:text-sand-100/50 whitespace-nowrap">${fmtDaysDiff(c.due_date)}</span>
             <span class="rounded-full px-2.5 py-1 text-[11px] font-medium ${PERIODIC_STATUS_COLORS[c.status]}">${PERIODIC_STATUS_LABELS[c.status]}</span>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>` : ''}
+
+  ${state.myAbsences.length > 0 ? `
+  <div class="mt-8 card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+    <div class="flex items-center gap-3">
+      <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brick-500/10 text-brick-600 dark:text-brick-500">
+        <i data-lucide="calendar-x" class="w-[18px] h-[18px]"></i>
+      </div>
+      <div>
+        <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Devamsızlık / İzin Geçmişim</h2>
+        <p class="text-xs text-ink-800/50 dark:text-sand-100/45">Gelmediğiniz veya izinli olduğunuz günler</p>
+      </div>
+    </div>
+    <div class="mt-4 divide-y divide-black/5 dark:divide-white/5">
+      ${state.myAbsences.map(a => `
+        <div class="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(a.leave_type || 'Belirtilmemiş')}</p>
+            <p class="text-xs text-ink-800/50 dark:text-sand-100/45">
+              ${escapeHtml(a.start_date)}${a.end_date && a.end_date !== a.start_date ? ' → ' + escapeHtml(a.end_date) : ''}
+              ${a.description ? ' · ' + escapeHtml(a.description) : ''}
+            </p>
+          </div>
+          <div class="shrink-0">
+            <span class="rounded-full bg-sand-100 dark:bg-ink-700 px-2.5 py-1 text-[11px] font-medium text-ink-800/70 dark:text-sand-100/60">${a.days ? a.days + ' gün' : ''}</span>
           </div>
         </div>`).join('')}
     </div>
@@ -1296,6 +1373,268 @@ function mapRow(rawRow) {
   return mapped;
 }
 
+/* =====================================================================
+   ADMIN — DEVAMSIZLIK / İZİN İZLEYİCİ İÇE AKTARMA
+   ===================================================================== */
+const ABSENCE_COLUMN_MAP = {
+  registry_number: ['sicil', 'sicil no', 'sicil_no', 'registry_number'],
+  employee_name: ['calisan adi', 'calisan adi soyadi', 'ad soyad', 'employee_name', 'isim'],
+  start_date: ['baslangic tarihi', 'baslangic', 'start_date'],
+  end_date: ['bitis tarihi', 'bitis', 'end_date'],
+  leave_type: ['izin turu', 'tur', 'leave_type'],
+  days: ['gunler', 'gun', 'days'],
+  description: ['aciklama', 'description', 'not']
+};
+function mapAbsenceRow(rawRow) {
+  const normalized = {};
+  for (const [k, v] of Object.entries(rawRow)) normalized[normalizeKey(k)] = v;
+  const mapped = {};
+  for (const [field, aliases] of Object.entries(ABSENCE_COLUMN_MAP)) {
+    const foundKey = aliases.map(normalizeKey).find(a => a in normalized);
+    if (foundKey) mapped[field] = normalized[foundKey];
+  }
+  if (mapped.registry_number) mapped.registry_number = String(mapped.registry_number).trim();
+  return mapped;
+}
+
+// "Çalışan İzni İzleyici" gibi isimlendirilmiş sayfayı bulur; yoksa son sayfayı dener.
+function findAbsenceSheetName(workbook) {
+  const preferred = workbook.SheetNames.find(n => /izleyici|devam/i.test(n));
+  return preferred || workbook.SheetNames[workbook.SheetNames.length - 1];
+}
+
+// Sayfa içinde "Sicil" ve "Başlangıç Tarihi" içeren başlık satırını bulup
+// altındaki verileri satır nesnelerine çevirir.
+function parseAbsenceRowsFromSheet(sheet) {
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' });
+  let headerRowIdx = -1, headers = [];
+  for (let i = 0; i < Math.min(aoa.length, 15); i++) {
+    const normRow = (aoa[i] || []).map(c => normalizeKey(c || ''));
+    if (normRow.includes('sicil') && normRow.some(c => c.includes('baslangic'))) {
+      headerRowIdx = i; headers = aoa[i]; break;
+    }
+  }
+  if (headerRowIdx === -1) return [];
+  const rows = [];
+  for (let i = headerRowIdx + 1; i < aoa.length; i++) {
+    const raw = aoa[i];
+    if (!raw || raw.every(c => c === '' || c === undefined || c === null)) continue;
+    const obj = {};
+    headers.forEach((h, idx) => { if (h) obj[h] = raw[idx]; });
+    const mapped = mapAbsenceRow(obj);
+    if (mapped.registry_number) rows.push(mapped);
+  }
+  return rows;
+}
+
+function parseAbsenceFile(file) {
+  state.absenceBulkFileName = file.name;
+  state.absenceBulkResults = null;
+  const isCsv = file.name.toLowerCase().endsWith('.csv');
+  if (isCsv) {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: (res) => {
+        state.absenceBulkRows = res.data.map(mapAbsenceRow).filter(r => r.registry_number);
+        state.absenceBulkSheetName = '';
+        render();
+      }
+    });
+  } else {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const wb = XLSX.read(ev.target.result, { type: 'binary' });
+      const sheetName = findAbsenceSheetName(wb);
+      const sheet = wb.Sheets[sheetName];
+      state.absenceBulkRows = parseAbsenceRowsFromSheet(sheet);
+      state.absenceBulkSheetName = sheetName;
+      render();
+    };
+    reader.readAsBinaryString(file);
+  }
+}
+
+// Bir devamsızlık satırı için, aynı çalışan + aynı tarih aralığı + aynı izin
+// türü tekrar yüklendiğinde AYNI belge kimliğini üretir. Böylece Excel'i her
+// gün olduğu gibi yeniden yüklemek güvenlidir: eski satırlar üzerine sadece
+// üzerine yazılır (kopya oluşturmaz), sadece gerçekten yeni satırlar eklenir.
+function absenceDocId(r) {
+  const slug = s => normalizeKey(s || '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const id = `${slug(r.registry_number)}_${slug(r.start_date)}_${slug(r.end_date || r.start_date)}_${slug(r.leave_type)}`;
+  return id.slice(0, 400) || null;
+}
+
+async function handleAbsenceImport() {
+  state.absenceImporting = true; render();
+  try {
+    // Daha önce içeri aktarılmış kayıtları bilmiyorsak (sayfa yeni açıldıysa)
+    // önce onları çekelim ki hangi satırların zaten var olduğunu görebilelim.
+    if (state.absences.length === 0) await loadAllAbsences();
+    const existingIds = new Set(state.absences.map(a => a.id));
+
+    const rows = state.absenceBulkRows;
+    let addedCount = 0, skippedCount = 0, invalidCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = db.batch();
+      let batchHasWrites = false;
+      rows.slice(i, i + CHUNK).forEach(r => {
+        const docId = absenceDocId(r);
+        if (!docId) { invalidCount++; return; }
+        if (existingIds.has(docId)) { skippedCount++; return; }
+        existingIds.add(docId);
+        const match = state.employees.find(e => e.registry_number === r.registry_number);
+        const ref = db.collection('absences').doc(docId);
+        batch.set(ref, {
+          registryNumber: r.registry_number,
+          employeeId: match ? match.id : null,
+          employeeName: r.employee_name || (match ? `${match.first_name} ${match.last_name}` : ''),
+          leaveType: r.leave_type || '',
+          startDate: r.start_date || '',
+          endDate: r.end_date || r.start_date || '',
+          days: r.days ? Number(r.days) : null,
+          description: r.description || '',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        batchHasWrites = true;
+        addedCount++;
+      });
+      if (batchHasWrites) await batch.commit();
+    }
+    state.absenceBulkResults = { addedCount, skippedCount, invalidCount, total: rows.length };
+    state.absenceBulkRows = [];
+    state.absenceBulkFileName = '';
+    await loadAllAbsences();
+  } catch (err) {
+    state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: state.absenceBulkRows.length, error: err.message };
+  } finally {
+    state.absenceImporting = false; render();
+  }
+}
+
+function adminAbsencesView() {
+  const search = normalizeKey(state.adminAbsenceSearch || '');
+  const filtered = search
+    ? state.absences.filter(a => normalizeKey(a.employee_name).includes(search) || normalizeKey(a.registry_number).includes(search))
+    : state.absences;
+  const shown = filtered.slice(0, 300);
+
+  return `
+  <div class="grid gap-5 lg:grid-cols-3">
+    <div class="card p-6 lg:col-span-2 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <div id="absence-dropzone" class="flex cursor-pointer flex-col items-center justify-center rounded-xl2 border-2 border-dashed border-pine-300 dark:border-pine-700 bg-pine-50/40 dark:bg-pine-900/10 px-6 py-10 text-center transition hover:bg-pine-50 dark:hover:bg-pine-900/20">
+        <i data-lucide="upload-cloud" class="w-7 h-7 text-pine-600 dark:text-pine-400"></i>
+        <p class="mt-2 text-sm font-medium text-ink-900 dark:text-sand-50">${escapeHtml(state.absenceBulkFileName) || 'Çalışan İzni İzleyici dosyasını sürükleyip bırakın veya tıklayın'}</p>
+        <p class="mt-1 text-xs text-ink-800/50 dark:text-sand-100/45">.xlsx, .xls veya .csv desteklenir</p>
+        <input id="absence-file-input" type="file" accept=".csv,.xlsx,.xls" class="hidden" />
+      </div>
+
+      ${state.absenceBulkRows.length > 0 ? `
+      <div class="mt-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <p class="text-sm font-medium text-ink-900 dark:text-sand-50">
+            ${state.absenceBulkRows.length} satır bulundu ${state.absenceBulkSheetName ? `(sayfa: "${escapeHtml(state.absenceBulkSheetName)}")` : ''}
+          </p>
+          <button data-action="import-absences" ${state.absenceImporting ? 'disabled' : ''} class="btn-primary inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium bg-pine-600 text-white hover:bg-pine-700 disabled:opacity-50">
+            ${state.absenceImporting ? 'Aktarılıyor…' : 'İçeri Aktar'}
+          </button>
+        </div>
+        <div class="mt-3 overflow-auto rounded-lg border border-black/5 dark:border-white/5">
+          <table class="w-full min-w-[700px] text-left text-xs">
+            <thead class="bg-sand-50 dark:bg-ink-900"><tr class="text-ink-800/50 dark:text-sand-100/45">
+              <th class="px-2 py-2 font-medium">Sicil</th>
+              <th class="px-2 py-2 font-medium">Ad</th>
+              <th class="px-2 py-2 font-medium">Tür</th>
+              <th class="px-2 py-2 font-medium">Başlangıç</th>
+              <th class="px-2 py-2 font-medium">Bitiş</th>
+              <th class="px-2 py-2 font-medium">Gün</th>
+            </tr></thead>
+            <tbody class="divide-y divide-black/5 dark:divide-white/5">
+              ${state.absenceBulkRows.slice(0, 20).map(r => `<tr>
+                <td class="px-2 py-1.5">${escapeHtml(r.registry_number || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.employee_name || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.leave_type || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.start_date || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.end_date || '')}</td>
+                <td class="px-2 py-1.5">${escapeHtml(r.days || '')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          ${state.absenceBulkRows.length > 20 ? `<p class="px-2 py-2 text-xs text-ink-800/45 dark:text-sand-100/40">…ve ${state.absenceBulkRows.length - 20} satır daha</p>` : ''}
+        </div>
+      </div>` : ''}
+
+      ${state.absenceBulkResults ? `
+        <div class="mt-5 rounded-lg ${state.absenceBulkResults.error ? 'bg-brick-500/10' : 'bg-pine-50 dark:bg-pine-900/30'} px-3.5 py-2.5 text-sm ${state.absenceBulkResults.error ? 'text-brick-600' : 'text-pine-700 dark:text-pine-300'}">
+          ${state.absenceBulkResults.error
+            ? `Hata: ${escapeHtml(state.absenceBulkResults.error)}`
+            : `${state.absenceBulkResults.addedCount} yeni kayıt eklendi` +
+              (state.absenceBulkResults.skippedCount ? `, ${state.absenceBulkResults.skippedCount} kayıt zaten vardı (atlandı)` : '') +
+              (state.absenceBulkResults.invalidCount ? `, ${state.absenceBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
+        </div>` : ''}
+
+      <div class="mt-8">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="font-display text-base font-semibold text-ink-900 dark:text-sand-50">Kayıtlı Devamsızlıklar</h2>
+          <input id="absence-search" type="text" value="${escapeHtml(state.adminAbsenceSearch || '')}" placeholder="Ad veya sicil no ile ara…"
+            class="input w-56 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-ink-900 px-3 py-2 text-sm" />
+        </div>
+        ${filtered.length === 0
+          ? `<p class="mt-4 text-sm text-ink-800/50 dark:text-sand-100/45">Kayıt bulunamadı.</p>`
+          : `<div class="mt-3 overflow-auto rounded-lg border border-black/5 dark:border-white/5">
+              <table class="w-full min-w-[760px] text-left text-xs">
+                <thead class="bg-sand-50 dark:bg-ink-900"><tr class="text-ink-800/50 dark:text-sand-100/45">
+                  <th class="px-3 py-2.5 font-medium">Çalışan</th>
+                  <th class="px-3 py-2.5 font-medium">Tür</th>
+                  <th class="px-3 py-2.5 font-medium">Başlangıç</th>
+                  <th class="px-3 py-2.5 font-medium">Bitiş</th>
+                  <th class="px-3 py-2.5 font-medium">Gün</th>
+                  <th class="px-3 py-2.5 font-medium">Açıklama</th>
+                  <th class="px-3 py-2.5 font-medium"></th>
+                </tr></thead>
+                <tbody class="divide-y divide-black/5 dark:divide-white/5">
+                  ${shown.map(a => `<tr>
+                    <td class="px-3 py-2">
+                      <p class="font-medium text-ink-900 dark:text-sand-50">${escapeHtml(a.employee_name || '—')}</p>
+                      <p class="text-[11px] text-ink-800/45 dark:text-sand-100/40">Sicil: ${escapeHtml(a.registry_number)}</p>
+                    </td>
+                    <td class="px-3 py-2">${escapeHtml(a.leave_type || '')}</td>
+                    <td class="px-3 py-2 whitespace-nowrap">${escapeHtml(a.start_date || '')}</td>
+                    <td class="px-3 py-2 whitespace-nowrap">${escapeHtml(a.end_date || '')}</td>
+                    <td class="px-3 py-2">${escapeHtml(a.days ?? '')}</td>
+                    <td class="px-3 py-2 max-w-[220px] truncate" title="${escapeHtml(a.description || '')}">${escapeHtml(a.description || '')}</td>
+                    <td class="px-3 py-2">
+                      <button data-action="delete-absence" data-id="${a.id}" class="flex h-7 w-7 items-center justify-center rounded text-ink-800/40 hover:bg-brick-500/10 hover:text-brick-600 dark:text-sand-100/40" aria-label="Sil">
+                        <i data-lucide="trash-2" class="w-[13px] h-[13px]"></i>
+                      </button>
+                    </td>
+                  </tr>`).join('')}
+                </tbody>
+              </table>
+              ${filtered.length > shown.length ? `<p class="px-3 py-2 text-xs text-ink-800/45 dark:text-sand-100/40">${filtered.length} kayıttan ilk ${shown.length} tanesi gösteriliyor — daraltmak için arama kullanın.</p>` : ''}
+            </div>`}
+      </div>
+    </div>
+
+    <div class="card p-6 bg-white dark:bg-ink-800 rounded-xl2 shadow-soft border border-black/5 dark:border-white/5">
+      <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-gold-500/10 text-gold-600 dark:text-gold-400">
+        <i data-lucide="file-spreadsheet" class="w-[18px] h-[18px]"></i>
+      </div>
+      <h3 class="mt-3 font-display text-sm font-semibold text-ink-900 dark:text-sand-50">Dosya Formatı</h3>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        "Çalışan İzni İzleyici" çalışma sayfanızdaki <strong>Sicil, Çalışan Adı, Başlangıç Tarihi, Bitiş Tarihi, İzin Türü, Günler, Açıklama</strong> sütunları otomatik tanınır.
+        Excel dosyanızı olduğu gibi (tüm sayfalarıyla) yükleyebilirsiniz — ilgili sayfa otomatik bulunur.
+      </p>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        Sicil numarası sistemdeki bir çalışanla eşleşirse kayıt o çalışanın panelinde de görünür.
+      </p>
+      <p class="mt-2 text-xs leading-relaxed text-ink-800/60 dark:text-sand-100/50">
+        <strong>Her gün aynı dosyayı yeniden yükleyebilirsiniz</strong> — daha önce aktarılmış satırlar otomatik atlanır, sadece yeni eklenen satırlar sisteme girer.
+      </p>
+    </div>
+  </div>`;
+}
+
 function adminImportView() {
   const rows = state.bulkRows;
 
@@ -1694,6 +2033,14 @@ document.addEventListener('click', async (e) => {
       }
       break;
     }
+    case 'import-absences': await handleAbsenceImport(); break;
+    case 'delete-absence': {
+      if (confirm('Bu devamsızlık/izin kaydını silmek istediğinize emin misiniz?')) {
+        await db.collection('absences').doc(el.dataset.id).delete();
+        await loadAllAbsences(); render();
+      }
+      break;
+    }
   }
 });
 
@@ -2006,11 +2353,26 @@ document.addEventListener('click', (e) => {
     const input = document.getElementById('bulk-file-input');
     if (input) input.click();
   }
+  if (e.target.closest('#absence-dropzone')) {
+    const input = document.getElementById('absence-file-input');
+    if (input) input.click();
+  }
+});
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'absence-search') {
+    state.adminAbsenceSearch = e.target.value;
+    render();
+    document.getElementById('absence-search')?.focus();
+  }
 });
 document.addEventListener('change', (e) => {
   if (e.target.id === 'bulk-file-input') {
     const file = e.target.files?.[0];
     if (file) parseBulkFile(file);
+  }
+  if (e.target.id === 'absence-file-input') {
+    const file = e.target.files?.[0];
+    if (file) parseAbsenceFile(file);
   }
   if (e.target.id === 'report-photo-input') {
     const file = e.target.files?.[0];
@@ -2026,7 +2388,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('dragover', (e) => {
-  if (e.target.closest('#dropzone')) e.preventDefault();
+  if (e.target.closest('#dropzone') || e.target.closest('#absence-dropzone')) e.preventDefault();
 });
 document.addEventListener('drop', (e) => {
   const dz = e.target.closest('#dropzone');
@@ -2034,6 +2396,12 @@ document.addEventListener('drop', (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (file) parseBulkFile(file);
+  }
+  const adz = e.target.closest('#absence-dropzone');
+  if (adz) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) parseAbsenceFile(file);
   }
 });
 
