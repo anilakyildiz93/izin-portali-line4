@@ -1501,6 +1501,53 @@ function absenceDocId(r) {
   return id.slice(0, 400) || null;
 }
 
+// Sicil numaralarını karşılaştırırken baştaki/sondaki boşlukları ve
+// başta gereksiz sıfırları yok sayar (örn. " 64704 " ile "064704" veya
+// "64704" hep aynı çalışan olarak eşleşsin diye).
+function regNorm(v) {
+  return String(v ?? '').trim().replace(/^0+(?=\d)/, '');
+}
+function findEmployeeByRegistry(registryNumber) {
+  const target = regNorm(registryNumber);
+  if (!target) return null;
+  return state.employees.find(e => regNorm(e.registry_number) === target) || null;
+}
+
+// Daha önce, eşleştirme mantığı henüz düzeltilmemişken içeri aktarılmış
+// kayıtların employeeId alanı boş kalmış olabilir. Bu fonksiyon, halihazırda
+// kayıtlı ama bir çalışana bağlanmamış devamsızlık kayıtlarını, sicil
+// numarasına göre tekrar eşleştirip Firestore'da günceller.
+async function reconcileAbsenceEmployeeIds() {
+  state.absenceImporting = true; render();
+  try {
+    const unmatched = state.absences.filter(a => !a.employee_id && a.registry_number);
+    let fixedCount = 0;
+    const CHUNK = 400;
+    for (let i = 0; i < unmatched.length; i += CHUNK) {
+      const batch = db.batch();
+      let hasWrites = false;
+      unmatched.slice(i, i + CHUNK).forEach(a => {
+        const match = findEmployeeByRegistry(a.registry_number);
+        if (match) {
+          batch.update(db.collection('absences').doc(a.id), {
+            employeeId: match.id,
+            employeeName: a.employee_name || `${match.first_name} ${match.last_name}`
+          });
+          hasWrites = true;
+          fixedCount++;
+        }
+      });
+      if (hasWrites) await batch.commit();
+    }
+    state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, reconciled: fixedCount, unmatchedTotal: unmatched.length };
+    await loadAllAbsences();
+  } catch (err) {
+    state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: err.message };
+  } finally {
+    state.absenceImporting = false; render();
+  }
+}
+
 async function handleAbsenceImport() {
   state.absenceImporting = true; render();
   try {
@@ -1520,7 +1567,7 @@ async function handleAbsenceImport() {
         if (!docId) { invalidCount++; return; }
         if (existingIds.has(docId)) { skippedCount++; return; }
         existingIds.add(docId);
-        const match = state.employees.find(e => e.registry_number === r.registry_number);
+        const match = findEmployeeByRegistry(r.registry_number);
         const ref = db.collection('absences').doc(docId);
         batch.set(ref, {
           registryNumber: r.registry_number,
@@ -1607,7 +1654,16 @@ function adminAbsencesView() {
             ? `Hata: ${escapeHtml(state.absenceBulkResults.error)}`
             : `${state.absenceBulkResults.addedCount} yeni kayıt eklendi` +
               (state.absenceBulkResults.skippedCount ? `, ${state.absenceBulkResults.skippedCount} kayıt zaten vardı (atlandı)` : '') +
-              (state.absenceBulkResults.invalidCount ? `, ${state.absenceBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') + '.'}
+              (state.absenceBulkResults.invalidCount ? `, ${state.absenceBulkResults.invalidCount} satır eksik bilgi nedeniyle atlandı` : '') +
+              (state.absenceBulkResults.reconciled !== undefined ? `${state.absenceBulkResults.reconciled} kayıt çalışana bağlandı (${state.absenceBulkResults.unmatchedTotal - state.absenceBulkResults.reconciled} kayıt hâlâ sicil no eşleşmedi).` : '.')}
+        </div>` : ''}
+
+      ${state.absences.some(a => !a.employee_id) ? `
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gold-500/10 px-3.5 py-2.5 text-sm text-gold-700 dark:text-gold-400">
+          <span>${state.absences.filter(a => !a.employee_id).length} kayıt henüz bir çalışan hesabına bağlanmamış — bu yüzden çalışan panelinde görünmüyor olabilirler.</span>
+          <button data-action="reconcile-absences" ${state.absenceImporting ? 'disabled' : ''} class="shrink-0 rounded-lg border border-gold-500/40 px-3 py-1.5 text-xs font-medium text-gold-700 dark:text-gold-400 hover:bg-gold-500/10 disabled:opacity-50">
+            ${state.absenceImporting ? 'Onarılıyor…' : 'Eşleştirmeleri Onar'}
+          </button>
         </div>` : ''}
 
       <div class="mt-8">
@@ -2071,6 +2127,7 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'import-absences': await handleAbsenceImport(); break;
+    case 'reconcile-absences': await reconcileAbsenceEmployeeIds(); break;
     case 'delete-absence': {
       if (confirm('Bu devamsızlık/izin kaydını silmek istediğinize emin misiniz?')) {
         await db.collection('absences').doc(el.dataset.id).delete();
