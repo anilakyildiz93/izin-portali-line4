@@ -73,12 +73,13 @@
    (Firebase Console > Project Settings > General > Your apps > Web app > SDK setup and configuration)
    ===================================================================== */
 const firebaseConfig = {
-  apiKey: 'YOUR-API-KEY',
-  authDomain: 'YOUR-PROJECT-ID.firebaseapp.com',
-  projectId: 'YOUR-PROJECT-ID',
-  storageBucket: 'YOUR-PROJECT-ID.appspot.com',
-  messagingSenderId: 'YOUR-SENDER-ID',
-  appId: 'YOUR-APP-ID'
+  apiKey: "AIzaSyAtrTgJS5_KUtPte_8Npr79Ek87vi73U_o",
+  authDomain: "izin-portali-46c4c.firebaseapp.com",
+  projectId: "izin-portali-46c4c",
+  storageBucket: "izin-portali-46c4c.firebasestorage.app",
+  messagingSenderId: "569534457357",
+  appId: "1:569534457357:web:fd647b1e133d6089e7d744",
+  measurementId: "G-5NLJ6D4RRQ"
 };
 
 // Bu site Vercel'e yüklendiğinde admin işlemleri (çalışan ekleme, toplu içeri
@@ -699,8 +700,15 @@ function loginScreen() {
    ===================================================================== */
 function employeeDashboardView() {
   const p = state.profile;
-  const remaining = Math.max(p.annual_leave_total - p.annual_leave_used, 0);
-  const pct = p.annual_leave_total > 0 ? Math.min(p.annual_leave_used / p.annual_leave_total, 1) : 0;
+  // "Kullanılan İzin", admin panelinden elle girilen sayı yerine, Devamsızlık
+  // Kayıtları'na (Excel'den günlük aktarılan "Çalışan İzni İzleyici" verisi)
+  // göre otomatik hesaplanır: leave_type'ı "Yıllık İzin" olan kayıtların
+  // "days" toplamı. Böylece her gün Excel'i yükledikçe bu sayı güncel kalır.
+  const usedFromAbsences = state.myAbsences
+    .filter(a => normalizeKey(a.leave_type).includes('yillik'))
+    .reduce((sum, a) => sum + (Number(a.days) || 0), 0);
+  const remaining = Math.max(p.annual_leave_total - usedFromAbsences, 0);
+  const pct = p.annual_leave_total > 0 ? Math.min(usedFromAbsences / p.annual_leave_total, 1) : 0;
   const r = 60, circumference = 2 * Math.PI * r, offset = circumference * (1 - pct);
   const anns = state.announcements.slice(0, 10);
 
@@ -722,7 +730,7 @@ function employeeDashboardView() {
           </div>
         </div>
         <dl class="space-y-3 text-sm">
-          <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-gold-500"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kullanılan</dt><dd class="font-semibold">${p.annual_leave_used} gün</dd></div>
+          <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-gold-500"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kullanılan</dt><dd class="font-semibold">${usedFromAbsences} gün</dd></div>
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-sand-200 dark:bg-ink-700"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kalan</dt><dd class="font-semibold">${remaining} gün</dd></div>
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pine-600"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Toplam Hak</dt><dd class="font-semibold">${p.annual_leave_total} gün</dd></div>
         </dl>
@@ -732,7 +740,7 @@ function employeeDashboardView() {
     <div class="space-y-5 lg:col-span-2">
       <div class="grid gap-4 sm:grid-cols-3">
         ${statCard('palmtree', 'Kalan İzin', remaining + ' gün', '', 'gold')}
-        ${statCard('calendar-clock', 'Kullanılan İzin', p.annual_leave_used + ' gün', '', 'pine')}
+        ${statCard('calendar-clock', 'Kullanılan İzin', usedFromAbsences + ' gün', '', 'pine')}
         ${statCard('megaphone', 'Güncel Duyuru', anns.length, 'son 10 duyuru', 'brick')}
       </div>
 
@@ -1358,7 +1366,10 @@ const COLUMN_MAP = {
   password: ['password', 'sifre', 'şifre']
 };
 function normalizeKey(key) {
-  return String(key).trim().toLowerCase()
+  // toLocaleLowerCase('tr') kullanılıyor çünkü standart toLowerCase(),
+  // Türkçe büyük "İ" harfini düz "i" değil farklı bir karaktere çevirir —
+  // bu da "İzleyici", "İzin" gibi kelimelerin tanınmasını engelliyordu.
+  return String(key).trim().toLocaleLowerCase('tr')
     .replace(/ı/g, 'i').replace(/ş/g, 's').replace(/ğ/g, 'g')
     .replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c');
 }
@@ -1399,7 +1410,7 @@ function mapAbsenceRow(rawRow) {
 
 // "Çalışan İzni İzleyici" gibi isimlendirilmiş sayfayı bulur; yoksa son sayfayı dener.
 function findAbsenceSheetName(workbook) {
-  const preferred = workbook.SheetNames.find(n => /izleyici|devam/i.test(n));
+  const preferred = workbook.SheetNames.find(n => /izleyici|devam/.test(normalizeKey(n)));
   return preferred || workbook.SheetNames[workbook.SheetNames.length - 1];
 }
 
@@ -1408,7 +1419,7 @@ function findAbsenceSheetName(workbook) {
 function parseAbsenceRowsFromSheet(sheet) {
   const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd', defval: '' });
   let headerRowIdx = -1, headers = [];
-  for (let i = 0; i < Math.min(aoa.length, 15); i++) {
+  for (let i = 0; i < Math.min(aoa.length, 30); i++) {
     const normRow = (aoa[i] || []).map(c => normalizeKey(c || ''));
     if (normRow.includes('sicil') && normRow.some(c => c.includes('baslangic'))) {
       headerRowIdx = i; headers = aoa[i]; break;
@@ -1430,27 +1441,53 @@ function parseAbsenceRowsFromSheet(sheet) {
 function parseAbsenceFile(file) {
   state.absenceBulkFileName = file.name;
   state.absenceBulkResults = null;
+  state.absenceBulkRows = [];
+  state.absenceBulkSheetName = '';
   const isCsv = file.name.toLowerCase().endsWith('.csv');
   if (isCsv) {
     Papa.parse(file, {
       header: true, skipEmptyLines: true,
       complete: (res) => {
         state.absenceBulkRows = res.data.map(mapAbsenceRow).filter(r => r.registry_number);
-        state.absenceBulkSheetName = '';
+        if (state.absenceBulkRows.length === 0) {
+          state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: 'Dosyada Sicil sütunu içeren bir başlık satırı bulunamadı.' };
+        }
+        render();
+      },
+      error: (err) => {
+        state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: err.message };
         render();
       }
     });
   } else {
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const wb = XLSX.read(ev.target.result, { type: 'binary' });
-      const sheetName = findAbsenceSheetName(wb);
-      const sheet = wb.Sheets[sheetName];
-      state.absenceBulkRows = parseAbsenceRowsFromSheet(sheet);
-      state.absenceBulkSheetName = sheetName;
+    reader.onerror = () => {
+      state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunamadı. Lütfen tekrar deneyin.' };
       render();
     };
-    reader.readAsBinaryString(file);
+    reader.onload = (ev) => {
+      try {
+        // readAsArrayBuffer + type:'array' büyük/karmaşık xlsx dosyalarında
+        // (koşullu biçimlendirme, veri doğrulama vb. içerenlerde) eski
+        // 'binary' yöntemine göre çok daha güvenilirdir.
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        const sheetName = findAbsenceSheetName(wb);
+        const sheet = wb.Sheets[sheetName];
+        const rows = parseAbsenceRowsFromSheet(sheet);
+        state.absenceBulkSheetName = sheetName;
+        if (rows.length === 0) {
+          state.absenceBulkResults = {
+            addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0,
+            error: `"${sheetName}" sayfasında Sicil / Başlangıç Tarihi sütunlarını içeren bir başlık satırı bulunamadı. Sayfa adını veya sütun başlıklarını kontrol edin.`
+          };
+        }
+        state.absenceBulkRows = rows;
+      } catch (err) {
+        state.absenceBulkResults = { addedCount: 0, skippedCount: 0, invalidCount: 0, total: 0, error: 'Dosya okunurken hata oluştu: ' + err.message };
+      }
+      render();
+    };
+    reader.readAsArrayBuffer(file);
   }
 }
 
