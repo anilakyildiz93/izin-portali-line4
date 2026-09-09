@@ -700,15 +700,8 @@ function loginScreen() {
    ===================================================================== */
 function employeeDashboardView() {
   const p = state.profile;
-  // "Kullanılan İzin", admin panelinden elle girilen sayı yerine, Devamsızlık
-  // Kayıtları'na (Excel'den günlük aktarılan "Çalışan İzni İzleyici" verisi)
-  // göre otomatik hesaplanır: leave_type'ı "Yıllık İzin" olan kayıtların
-  // "days" toplamı. Böylece her gün Excel'i yükledikçe bu sayı güncel kalır.
-  const usedFromAbsences = state.myAbsences
-    .filter(a => normalizeKey(a.leave_type).includes('yillik'))
-    .reduce((sum, a) => sum + (Number(a.days) || 0), 0);
-  const remaining = Math.max(p.annual_leave_total - usedFromAbsences, 0);
-  const pct = p.annual_leave_total > 0 ? Math.min(usedFromAbsences / p.annual_leave_total, 1) : 0;
+  const remaining = Math.max(p.annual_leave_total - p.annual_leave_used, 0);
+  const pct = p.annual_leave_total > 0 ? Math.min(p.annual_leave_used / p.annual_leave_total, 1) : 0;
   const r = 60, circumference = 2 * Math.PI * r, offset = circumference * (1 - pct);
   const anns = state.announcements.slice(0, 10);
 
@@ -730,7 +723,7 @@ function employeeDashboardView() {
           </div>
         </div>
         <dl class="space-y-3 text-sm">
-          <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-gold-500"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kullanılan</dt><dd class="font-semibold">${usedFromAbsences} gün</dd></div>
+          <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-gold-500"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kullanılan</dt><dd class="font-semibold">${p.annual_leave_used} gün</dd></div>
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-sand-200 dark:bg-ink-700"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Kalan</dt><dd class="font-semibold">${remaining} gün</dd></div>
           <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pine-600"></span><dt class="text-ink-800/60 dark:text-sand-100/55">Toplam Hak</dt><dd class="font-semibold">${p.annual_leave_total} gün</dd></div>
         </dl>
@@ -740,7 +733,7 @@ function employeeDashboardView() {
     <div class="space-y-5 lg:col-span-2">
       <div class="grid gap-4 sm:grid-cols-3">
         ${statCard('palmtree', 'Kalan İzin', remaining + ' gün', '', 'gold')}
-        ${statCard('calendar-clock', 'Kullanılan İzin', usedFromAbsences + ' gün', '', 'pine')}
+        ${statCard('calendar-clock', 'Kullanılan İzin', p.annual_leave_used + ' gün', '', 'pine')}
         ${statCard('megaphone', 'Güncel Duyuru', anns.length, 'son 10 duyuru', 'brick')}
       </div>
 
